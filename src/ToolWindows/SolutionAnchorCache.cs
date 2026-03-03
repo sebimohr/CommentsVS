@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 namespace CommentsVS.ToolWindows
 {
@@ -11,6 +12,8 @@ namespace CommentsVS.ToolWindows
     {
         private readonly ConcurrentDictionary<string, IReadOnlyList<AnchorItem>> _fileAnchors =
             new(StringComparer.OrdinalIgnoreCase);
+        private int _updateNesting;
+        private int _pendingNotification;
 
         /// <summary>
         /// Event raised when the cache contents change.
@@ -49,7 +52,7 @@ namespace CommentsVS.ToolWindows
                 _fileAnchors[filePath] = anchors;
             }
 
-            CacheChanged?.Invoke(this, EventArgs.Empty);
+            NotifyCacheChanged();
         }
 
         /// <summary>
@@ -65,7 +68,7 @@ namespace CommentsVS.ToolWindows
 
             if (_fileAnchors.TryRemove(filePath, out _))
             {
-                CacheChanged?.Invoke(this, EventArgs.Empty);
+                NotifyCacheChanged();
             }
         }
 
@@ -137,7 +140,7 @@ namespace CommentsVS.ToolWindows
         public void Clear()
         {
             _fileAnchors.Clear();
-            CacheChanged?.Invoke(this, EventArgs.Empty);
+            NotifyCacheChanged();
         }
 
         /// <summary>
@@ -164,17 +167,63 @@ namespace CommentsVS.ToolWindows
         /// <param name="data">The data to load.</param>
         public void LoadFrom(Dictionary<string, IReadOnlyList<AnchorItem>> data)
         {
-            _fileAnchors.Clear();
-
-            if (data != null)
+            using (BeginUpdate())
             {
-                foreach (KeyValuePair<string, IReadOnlyList<AnchorItem>> kvp in data)
+                _fileAnchors.Clear();
+
+                if (data != null)
                 {
-                    _fileAnchors[kvp.Key] = kvp.Value;
+                    foreach (KeyValuePair<string, IReadOnlyList<AnchorItem>> kvp in data)
+                    {
+                        _fileAnchors[kvp.Key] = kvp.Value;
+                    }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Begins a batched cache update operation.
+        /// CacheChanged is raised once when the outermost scope completes.
+        /// </summary>
+        public IDisposable BeginUpdate()
+        {
+            _ = Interlocked.Increment(ref _updateNesting);
+            return new UpdateScope(this);
+        }
+
+        private void EndUpdate()
+        {
+            var nesting = Interlocked.Decrement(ref _updateNesting);
+            if (nesting <= 0)
+            {
+                _updateNesting = 0;
+                if (Interlocked.Exchange(ref _pendingNotification, 0) == 1)
+                {
+                    CacheChanged?.Invoke(this, EventArgs.Empty);
+                }
+            }
+        }
+
+        private void NotifyCacheChanged()
+        {
+            if (Volatile.Read(ref _updateNesting) > 0)
+            {
+                _ = Interlocked.Exchange(ref _pendingNotification, 1);
+                return;
             }
 
             CacheChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private sealed class UpdateScope(SolutionAnchorCache owner) : IDisposable
+        {
+            private SolutionAnchorCache _owner = owner;
+
+            public void Dispose()
+            {
+                SolutionAnchorCache owner = Interlocked.Exchange(ref _owner, null);
+                owner?.EndUpdate();
+            }
         }
 
         /// <summary>

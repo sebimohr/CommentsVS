@@ -90,81 +90,84 @@ namespace CommentsVS.ToolWindows
                 HashSet<string> extensionsToScan = options.GetFileExtensionsSet();
                 HashSet<string> foldersToIgnore = options.GetIgnoredFoldersSet();
 
-                // Clear cache before scanning
-                _cache.Clear();
-
-                // Collect all files to scan
-                var filesToScan = new List<(string FilePath, string ProjectName)>();
-                await CollectFilesFromFileSystemAsync(solutionDir, solution.FullName, filesToScan, extensionsToScan, foldersToIgnore, ct).ConfigureAwait(false);
-
-                if (ct.IsCancellationRequested)
+                using (_cache.BeginUpdate())
                 {
-                    ScanCompleted?.Invoke(this, new ScanCompletedEventArgs(0, true, "Scan cancelled"));
-                    return;
+                    // Clear cache before scanning
+                    _cache.Clear();
+
+                    // Collect all files to scan
+                    var filesToScan = new List<(string FilePath, string ProjectName)>();
+                    await CollectFilesFromFileSystemAsync(solutionDir, solution.FullName, filesToScan, extensionsToScan, foldersToIgnore, ct).ConfigureAwait(false);
+
+                    if (ct.IsCancellationRequested)
+                    {
+                        ScanCompleted?.Invoke(this, new ScanCompletedEventArgs(0, true, "Scan cancelled"));
+                        return;
+                    }
+
+                    var totalFiles = filesToScan.Count;
+                    var processedFiles = 0;
+                    var totalAnchors = 0;
+                    var lastProgressReport = 0;
+                    var progressLock = new object();
+
+                    // Process files in parallel for improved performance
+                    await Task.Run(() =>
+                    {
+                        var parallelOptions = new ParallelOptions
+                        {
+                            CancellationToken = ct,
+                            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) // Leave one core free for UI
+                        };
+
+                        Parallel.ForEach(filesToScan, parallelOptions, (fileInfo, loopState) =>
+                        {
+                            if (ct.IsCancellationRequested)
+                            {
+                                loopState.Stop();
+                                return;
+                            }
+
+                            (var filePath, var projectName) = fileInfo;
+
+                            try
+                            {
+                                // Read file content synchronously (we're already on a background thread)
+                                var content = ReadFileSync(filePath);
+                                if (!string.IsNullOrEmpty(content))
+                                {
+                                    IReadOnlyList<AnchorItem> anchors = _anchorService.ScanText(content, filePath, projectName);
+                                    if (anchors.Count > 0)
+                                    {
+                                        _cache.AddOrUpdateFile(filePath, anchors);
+                                        Interlocked.Add(ref totalAnchors, anchors.Count);
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                ex.Log();
+                            }
+
+                            var currentProcessed = Interlocked.Increment(ref processedFiles);
+
+                            // Report progress every 10 files or at the end (throttled to avoid UI flooding)
+                            if (currentProcessed == totalFiles || currentProcessed - lastProgressReport >= 10)
+                            {
+                                lock (progressLock)
+                                {
+                                    if (currentProcessed - lastProgressReport >= 10 || currentProcessed == totalFiles)
+                                    {
+                                        lastProgressReport = currentProcessed;
+                                        ScanProgress?.Invoke(this, new ScanProgressEventArgs(currentProcessed, totalFiles, totalAnchors));
+                                    }
+                                }
+                            }
+                        });
+                    }, ct);
+
+                    ScanCompleted?.Invoke(this, new ScanCompletedEventArgs(totalAnchors, false, null));
                 }
-
-                var totalFiles = filesToScan.Count;
-                var processedFiles = 0;
-                var totalAnchors = 0;
-                var lastProgressReport = 0;
-                var progressLock = new object();
-
-                // Process files in parallel for improved performance
-                await Task.Run(() =>
-                {
-                    var parallelOptions = new ParallelOptions
-                    {
-                        CancellationToken = ct,
-                        MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) // Leave one core free for UI
-                    };
-
-                    Parallel.ForEach(filesToScan, parallelOptions, (fileInfo, loopState) =>
-                    {
-                        if (ct.IsCancellationRequested)
-                        {
-                            loopState.Stop();
-                            return;
-                        }
-
-                        (var filePath, var projectName) = fileInfo;
-
-                        try
-                        {
-                            // Read file content synchronously (we're already on a background thread)
-                            var content = ReadFileSync(filePath);
-                            if (!string.IsNullOrEmpty(content))
-                            {
-                                IReadOnlyList<AnchorItem> anchors = _anchorService.ScanText(content, filePath, projectName);
-                                if (anchors.Count > 0)
-                                {
-                                    _cache.AddOrUpdateFile(filePath, anchors);
-                                    Interlocked.Add(ref totalAnchors, anchors.Count);
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            ex.Log();
-                        }
-
-                        var currentProcessed = Interlocked.Increment(ref processedFiles);
-
-                        // Report progress every 10 files or at the end (throttled to avoid UI flooding)
-                        if (currentProcessed == totalFiles || currentProcessed - lastProgressReport >= 10)
-                        {
-                            lock (progressLock)
-                            {
-                                if (currentProcessed - lastProgressReport >= 10 || currentProcessed == totalFiles)
-                                {
-                                    lastProgressReport = currentProcessed;
-                                    ScanProgress?.Invoke(this, new ScanProgressEventArgs(currentProcessed, totalFiles, totalAnchors));
-                                }
-                            }
-                        }
-                    });
-                }, ct);
-
-                ScanCompleted?.Invoke(this, new ScanCompletedEventArgs(totalAnchors, false, null));
             }
             catch (OperationCanceledException)
             {

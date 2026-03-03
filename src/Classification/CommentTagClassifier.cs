@@ -18,6 +18,7 @@ namespace CommentsVS.Classification
         private readonly HashSet<string> _customTags;
         private readonly Regex _anchorRegex;
         private readonly Regex _metadataRegex;
+        private readonly BufferedTagChangeNotifier _changeNotifier;
 
         private readonly IClassificationType _metadataType;
         private bool _disposed;
@@ -35,6 +36,8 @@ namespace CommentsVS.Classification
             _registry = registry;
             _metadataType = _registry.GetClassificationType(CommentTagClassificationTypes.Metadata);
             _buffer.Changed += OnBufferChanged;
+            _changeNotifier = new BufferedTagChangeNotifier(args =>
+                ClassificationChanged?.Invoke(this, new ClassificationChangedEventArgs(args.Span)));
 
             // Get file path and cache anchor tags/regex for this file (from .editorconfig or Options)
             var filePath = buffer.GetFileName();
@@ -49,12 +52,7 @@ namespace CommentsVS.Classification
 
         private void OnBufferChanged(object sender, TextContentChangedEventArgs e)
         {
-            foreach (ITextChange change in e.Changes)
-            {
-                ITextSnapshotLine line = e.After.GetLineFromPosition(change.NewPosition);
-                ClassificationChanged?.Invoke(this, new ClassificationChangedEventArgs(
-                    new SnapshotSpan(e.After, line.Start, line.Length)));
-            }
+            _changeNotifier.Queue(e);
         }
 
         public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan span)
@@ -177,6 +175,7 @@ namespace CommentsVS.Classification
 
             _disposed = true;
             _buffer.Changed -= OnBufferChanged;
+            _changeNotifier.Dispose();
         }
     }
 }

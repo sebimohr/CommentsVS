@@ -42,6 +42,7 @@ namespace CommentsVS.Tagging
         private readonly IReadOnlyList<string> _anchorTags;
         private readonly HashSet<string> _customTags;
         private readonly Regex _anchorRegex;
+        private readonly BufferedTagChangeNotifier _changeNotifier;
         private bool _disposed;
 
         public event EventHandler<SnapshotSpanEventArgs> TagsChanged;
@@ -50,6 +51,7 @@ namespace CommentsVS.Tagging
         {
             _buffer = buffer;
             _buffer.Changed += OnBufferChanged;
+            _changeNotifier = new BufferedTagChangeNotifier(args => TagsChanged?.Invoke(this, args));
 
             // Get file path and cache anchor tags/regex for this file (from .editorconfig or Options)
             var filePath = buffer.GetFileName();
@@ -60,18 +62,7 @@ namespace CommentsVS.Tagging
 
         private void OnBufferChanged(object sender, TextContentChangedEventArgs e)
         {
-            // Raise tags changed for modified lines
-            foreach (ITextChange change in e.Changes)
-            {
-                ITextSnapshotLine startLine = e.After.GetLineFromPosition(change.NewPosition);
-                ITextSnapshotLine endLine = e.After.GetLineFromPosition(change.NewEnd);
-
-                var start = startLine.Start.Position;
-                var length = endLine.End.Position - start;
-
-                TagsChanged?.Invoke(this, new SnapshotSpanEventArgs(
-                    new SnapshotSpan(e.After, start, length)));
-            }
+            _changeNotifier.Queue(e);
         }
 
         public IEnumerable<ITagSpan<OverviewMarkTag>> GetTags(NormalizedSnapshotSpanCollection spans)
@@ -189,6 +180,7 @@ namespace CommentsVS.Tagging
 
             _disposed = true;
             _buffer.Changed -= OnBufferChanged;
+            _changeNotifier.Dispose();
         }
     }
 }
