@@ -97,17 +97,7 @@ namespace CommentsVS.Tagging
                 var text = span.GetText();
 
                 // Fast pre-check: skip regex if no anchor keywords are present
-                var hasAnyAnchor = false;
-                foreach (var keyword in _anchorTags)
-                {
-                    if (text.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        hasAnyAnchor = true;
-                        break;
-                    }
-                }
-
-                if (!hasAnyAnchor)
+                if (!ContainsAnyKeywordInRange(text, 0, text.Length, _anchorTags))
                 {
                     continue;
                 }
@@ -116,29 +106,21 @@ namespace CommentsVS.Tagging
 
                 foreach ((int Start, int Length) commentSpan in CommentSpanHelper.FindCommentSpans(text))
                 {
-                    var commentText = text.Substring(commentSpan.Start, commentSpan.Length);
-
-                    // Skip comment spans that don't contain anchor keywords
-                    var hasAnchorInComment = false;
-                    foreach (var keyword in _anchorTags)
-                    {
-                        if (commentText.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            hasAnchorInComment = true;
-                            break;
-                        }
-                    }
-
-                    if (!hasAnchorInComment)
+                    if (!ContainsAnyKeywordInRange(text, commentSpan.Start, commentSpan.Length, _anchorTags))
                     {
                         continue;
                     }
 
-                    foreach (Match match in _anchorRegex.Matches(commentText))
+                    var commentStart = commentSpan.Start;
+                    var commentEnd = commentStart + commentSpan.Length;
+
+                    Match match = _anchorRegex.Match(text, commentStart);
+                    while (match.Success && match.Index < commentEnd)
                     {
                         Group tagGroup = match.Groups["tag"];
                         if (!tagGroup.Success)
                         {
+                            match = match.NextMatch();
                             continue;
                         }
 
@@ -154,12 +136,27 @@ namespace CommentsVS.Tagging
                         Group pfxGroup = match.Groups["tagprefix"];
                         var spanStart = pfxGroup.Success ? pfxGroup.Index : tagGroup.Index;
                         var spanLength = (tagGroup.Index + tagGroup.Length) - spanStart;
-                        var tagSpan = new SnapshotSpan(snapshot, lineStart + commentSpan.Start + spanStart, spanLength);
+                        var tagSpan = new SnapshotSpan(snapshot, lineStart + spanStart, spanLength);
 
                         yield return new TagSpan<OverviewMarkTag>(tagSpan, new OverviewMarkTag(formatName));
+
+                        match = match.NextMatch();
                     }
                 }
             }
+        }
+
+        private static bool ContainsAnyKeywordInRange(string text, int start, int length, IReadOnlyList<string> keywords)
+        {
+            foreach (var keyword in keywords)
+            {
+                if (text.IndexOf(keyword, start, length, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

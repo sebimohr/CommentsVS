@@ -96,16 +96,7 @@ namespace CommentsVS.Classification
             var text = span.GetText();
 
             // Fast pre-check: skip regex if no anchor keywords are present (case-insensitive)
-            var hasAnyAnchor = false;
-            foreach (var keyword in _anchorTags)
-            {
-                if (text.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    hasAnyAnchor = true;
-                    break;
-                }
-            }
-            if (!hasAnyAnchor)
+            if (!ContainsAnyKeywordInRange(text, 0, text.Length, _anchorTags))
             {
                 return result;
             }
@@ -114,29 +105,21 @@ namespace CommentsVS.Classification
 
             foreach ((int Start, int Length) commentSpan in CommentSpanHelper.FindCommentSpans(text))
             {
-                var commentText = text.Substring(commentSpan.Start, commentSpan.Length);
-
-                // Skip comment spans that don't contain anchor keywords
-                var hasAnchorInComment = false;
-                foreach (var keyword in _anchorTags)
-                {
-                    if (commentText.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        hasAnchorInComment = true;
-                        break;
-                    }
-                }
-
-                if (!hasAnchorInComment)
+                if (!ContainsAnyKeywordInRange(text, commentSpan.Start, commentSpan.Length, _anchorTags))
                 {
                     continue;
                 }
 
-                foreach (Match match in _anchorRegex.Matches(commentText))
+                var commentStart = commentSpan.Start;
+                var commentEnd = commentStart + commentSpan.Length;
+
+                Match match = _anchorRegex.Match(text, commentStart);
+                while (match.Success && match.Index < commentEnd)
                 {
                     Group tagGroup = match.Groups["tag"];
                     if (!tagGroup.Success)
                     {
+                        match = match.NextMatch();
                         continue;
                     }
 
@@ -151,7 +134,7 @@ namespace CommentsVS.Classification
                         var spanLength = (tagGroup.Index + tagGroup.Length) - spanStart;
                         var tagSpan = new SnapshotSpan(
                             span.Snapshot,
-                            lineStart + commentSpan.Start + spanStart,
+                            lineStart + spanStart,
                             spanLength);
                         result.Add(new ClassificationSpan(tagSpan, classificationType));
                     }
@@ -160,20 +143,22 @@ namespace CommentsVS.Classification
                     {
                         // Classify the optional metadata right after the anchor.
                         // Examples: TODO(@mads): ...  TODO[#123]: ...  ANCHOR(section-name): ...
-                        Match metaMatch = _metadataRegex.Match(commentText, tagGroup.Index);
-                        if (metaMatch.Success && metaMatch.Index == tagGroup.Index)
+                        Match metaMatch = _metadataRegex.Match(text, tagGroup.Index);
+                        if (metaMatch.Success && metaMatch.Index == tagGroup.Index && metaMatch.Index < commentEnd)
                         {
                             Group metaGroup = metaMatch.Groups["metadata"];
                             if (metaGroup.Success && metaGroup.Length > 0)
                             {
                                 var metaSpan = new SnapshotSpan(
                                     span.Snapshot,
-                                    lineStart + commentSpan.Start + metaGroup.Index,
+                                    lineStart + metaGroup.Index,
                                     metaGroup.Length);
                                 result.Add(new ClassificationSpan(metaSpan, _metadataType));
                             }
                         }
                     }
+
+                    match = match.NextMatch();
                 }
             }
 
@@ -194,6 +179,19 @@ namespace CommentsVS.Classification
             }
 
             return null;
+        }
+
+        private static bool ContainsAnyKeywordInRange(string text, int start, int length, IReadOnlyList<string> keywords)
+        {
+            foreach (var keyword in keywords)
+            {
+                if (text.IndexOf(keyword, start, length, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public void Dispose()
