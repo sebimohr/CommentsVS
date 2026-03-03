@@ -26,32 +26,180 @@ namespace CommentsVS.Services
                 yield break;
             }
 
-            // Look for inline single-line comments (//), skipping URL-like tokens such as http://
+            var starts = new List<(int Start, string Token)>();
+
+            AddCandidate(starts, FindInlineSlashSlashCommentStart(text), "//");
+            AddCandidate(starts, FindInlineSqlCommentStart(text), "--");
+            AddCandidate(starts, FindInlineBlockCommentStart(text, "/*"), "/*");
+            AddCandidate(starts, FindInlineBlockCommentStart(text, "<!--"), "<!--");
+            AddCandidate(starts, FindInlineHashCommentStart(text), "#");
+
+            if (starts.Count == 0)
+            {
+                yield break;
+            }
+
+            starts.Sort((x, y) => x.Start.CompareTo(y.Start));
+            (int Start, string Token) first = starts[0];
+
+            // Single-line comments continue to end of line
+            if (first.Token is "//" or "--" or "#")
+            {
+                yield return (first.Start, text.Length - first.Start);
+                yield break;
+            }
+
+            // Block comments end at closing token if present, otherwise to end of line
+            var closeToken = first.Token == "/*" ? "*/" : "-->";
+            var closeIndex = text.IndexOf(closeToken, first.Start + first.Token.Length, StringComparison.Ordinal);
+            if (closeIndex >= 0)
+            {
+                var end = closeIndex + closeToken.Length;
+                yield return (first.Start, end - first.Start);
+                yield break;
+            }
+
+            yield return (first.Start, text.Length - first.Start);
+        }
+
+        private static void AddCandidate(List<(int Start, string Token)> candidates, int index, string token)
+        {
+            if (index >= 0)
+            {
+                candidates.Add((index, token));
+            }
+        }
+
+        private static int FindInlineSlashSlashCommentStart(string text)
+        {
             var searchIndex = 0;
             while (searchIndex < text.Length)
             {
-                var inlineCommentIndex = text.IndexOf("//", searchIndex, StringComparison.Ordinal);
-                if (inlineCommentIndex < 0)
+                var index = text.IndexOf("//", searchIndex, StringComparison.Ordinal);
+                if (index < 0)
                 {
-                    break;
+                    return -1;
                 }
 
-                // Skip URI-like schemes (http://, https://, file://, etc.)
-                if (inlineCommentIndex > 0 && text[inlineCommentIndex - 1] == ':')
+                if (index > 0 && text[index - 1] == ':')
                 {
-                    searchIndex = inlineCommentIndex + 2;
+                    searchIndex = index + 2;
                     continue;
                 }
 
-                // Make sure it's not inside a string literal
-                if (!IsInsideStringLiteral(text, inlineCommentIndex))
+                if (!IsInsideStringLiteral(text, index))
                 {
-                    yield return (inlineCommentIndex, text.Length - inlineCommentIndex);
-                    yield break;
+                    return index;
                 }
 
-                searchIndex = inlineCommentIndex + 2;
+                searchIndex = index + 2;
             }
+
+            return -1;
+        }
+
+        private static int FindInlineSqlCommentStart(string text)
+        {
+            var searchIndex = 0;
+            while (searchIndex < text.Length)
+            {
+                var index = text.IndexOf("--", searchIndex, StringComparison.Ordinal);
+                if (index < 0)
+                {
+                    return -1;
+                }
+
+                var validPrefix = index == 0 || char.IsWhiteSpace(text[index - 1]) || text[index - 1] == ';';
+                if (!validPrefix || IsInsideStringLiteral(text, index))
+                {
+                    searchIndex = index + 2;
+                    continue;
+                }
+
+                return index;
+            }
+
+            return -1;
+        }
+
+        private static int FindInlineBlockCommentStart(string text, string token)
+        {
+            var searchIndex = 0;
+            while (searchIndex < text.Length)
+            {
+                var index = text.IndexOf(token, searchIndex, StringComparison.Ordinal);
+                if (index < 0)
+                {
+                    return -1;
+                }
+
+                if (!IsInsideStringLiteral(text, index))
+                {
+                    return index;
+                }
+
+                searchIndex = index + token.Length;
+            }
+
+            return -1;
+        }
+
+        private static int FindInlineHashCommentStart(string text)
+        {
+            var searchIndex = 0;
+            while (searchIndex < text.Length)
+            {
+                var index = text.IndexOf('#', searchIndex);
+                if (index < 0)
+                {
+                    return -1;
+                }
+
+                // Require whitespace or punctuation before # to avoid matching identifiers/fragments.
+                var validPrefix = index == 0 || char.IsWhiteSpace(text[index - 1]) || text[index - 1] is ';' or ',' or ')';
+                if (!validPrefix || IsInsideStringLiteral(text, index))
+                {
+                    searchIndex = index + 1;
+                    continue;
+                }
+
+                // Skip common preprocessor directives when # begins the token
+                if (index == 0 || (index > 0 && char.IsWhiteSpace(text[index - 1])))
+                {
+                    var tail = text.Substring(index + 1).TrimStart();
+                    if (IsPreprocessorDirective(tail))
+                    {
+                        searchIndex = index + 1;
+                        continue;
+                    }
+                }
+
+                return index;
+            }
+
+            return -1;
+        }
+
+        private static bool IsPreprocessorDirective(string textAfterHash)
+        {
+            if (string.IsNullOrEmpty(textAfterHash))
+            {
+                return false;
+            }
+
+            return textAfterHash.StartsWith("if", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("elif", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("else", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("endif", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("region", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("endregion", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("define", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("undef", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("line", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("error", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("warning", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("pragma", StringComparison.OrdinalIgnoreCase)
+                   || textAfterHash.StartsWith("nullable", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

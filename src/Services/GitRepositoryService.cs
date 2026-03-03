@@ -15,6 +15,14 @@ namespace CommentsVS.Services
         /// Using ConcurrentDictionary for thread-safety since multiple taggers may access simultaneously.
         /// </summary>
         private static readonly ConcurrentDictionary<string, GitRepositoryInfo> _repoCache = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, string> _gitDirCache = new(StringComparer.OrdinalIgnoreCase);
+
+        private const string NoGitDirectorySentinel = "<none>";
+        private static readonly GitRepositoryInfo NoRepositoryInfoSentinel = new(
+            GitHostingProvider.Unknown,
+            string.Empty,
+            string.Empty,
+            string.Empty);
 
         /// <summary>
         /// Cache of in-flight async operations to prevent duplicate reads.
@@ -29,6 +37,7 @@ namespace CommentsVS.Services
         {
             _repoCache.Clear();
             _pendingReads.Clear();
+            _gitDirCache.Clear();
         }
 
         /// <summary>
@@ -86,7 +95,7 @@ namespace CommentsVS.Services
 
             try
             {
-                var gitDir = FindGitDirectory(filePath);
+                var gitDir = GetGitDirectoryCached(filePath);
                 if (gitDir == null)
                 {
                     return null;
@@ -95,7 +104,7 @@ namespace CommentsVS.Services
                 // Check cache first
                 if (_repoCache.TryGetValue(gitDir, out GitRepositoryInfo cachedInfo))
                 {
-                    return cachedInfo;
+                    return ReferenceEquals(cachedInfo, NoRepositoryInfoSentinel) ? null : cachedInfo;
                 }
 
                 // Check if there's already a pending read for this git directory
@@ -153,14 +162,14 @@ namespace CommentsVS.Services
 
             try
             {
-                var gitDir = FindGitDirectory(filePath);
+                var gitDir = GetGitDirectoryCached(filePath);
                 if (gitDir == null)
                 {
                     return null;
                 }
 
                 _repoCache.TryGetValue(gitDir, out GitRepositoryInfo cachedInfo);
-                return cachedInfo;
+                return ReferenceEquals(cachedInfo, NoRepositoryInfoSentinel) ? null : cachedInfo;
             }
             catch (Exception ex)
             {
@@ -176,16 +185,30 @@ namespace CommentsVS.Services
 
             if (string.IsNullOrEmpty(remoteUrl))
             {
-                _repoCache.TryAdd(gitDir, null);
+                _repoCache[gitDir] = NoRepositoryInfoSentinel;
                 return null;
             }
 
             GitRepositoryInfo repoInfo = ParseRemoteUrl(remoteUrl);
 
             // Cache even if null to avoid repeated lookups
-            _repoCache.TryAdd(gitDir, repoInfo);
+            _repoCache[gitDir] = repoInfo ?? NoRepositoryInfoSentinel;
 
             return repoInfo;
+        }
+
+        private static string GetGitDirectoryCached(string filePath)
+        {
+            if (_gitDirCache.TryGetValue(filePath, out string cachedGitDir))
+            {
+                return string.Equals(cachedGitDir, NoGitDirectorySentinel, StringComparison.Ordinal)
+                    ? null
+                    : cachedGitDir;
+            }
+
+            var gitDir = FindGitDirectory(filePath);
+            _gitDirCache[filePath] = gitDir ?? NoGitDirectorySentinel;
+            return gitDir;
         }
 
         private static string FindGitDirectory(string startPath)

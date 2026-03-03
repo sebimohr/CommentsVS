@@ -189,4 +189,22 @@ public sealed class LanguageCommentStyleTests
     {
         Assert.IsTrue(LanguageCommentStyle.Cpp.SupportsMultiLineDoc);
     }
+
+    [TestMethod]
+    [DataRow("-- sql comment")]
+    [DataRow("<!-- html comment -->")]
+    [DataRow("# powershell comment")]
+    public void IsCommentLine_AdditionalCommentStyles_ReturnsTrue(string line)
+    {
+        Assert.IsTrue(LanguageCommentStyle.IsCommentLine(line));
+    }
+
+    [TestMethod]
+    [DataRow("#if DEBUG")]
+    [DataRow("#region Foo")]
+    [DataRow("#pragma warning disable CS0168")]
+    public void IsCommentLine_PreprocessorDirectives_ReturnsFalse(string line)
+    {
+        Assert.IsFalse(LanguageCommentStyle.IsCommentLine(line));
+    }
 }

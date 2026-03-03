@@ -278,11 +278,11 @@ namespace CommentsVS.Services
 
         /// <summary>
         /// Regex pattern to match comment line prefixes across all supported languages.
-        /// Matches: //, /*, *, ' (VB)
+        /// Matches: //, /*, *, ', --, <!--, # (excluding common C#/VB preprocessor directives)
         /// </summary>
         public static readonly System.Text.RegularExpressions.Regex CommentLineRegex = new(
-            @"^\s*(//|/\*|\*|')",
-            System.Text.RegularExpressions.RegexOptions.Compiled);
+            @"^\s*(//|/\*|\*|'|--|<!--|#(?!\s*(if|elif|else|endif|region|endregion|define|undef|line|error|warning|pragma|nullable)\b))",
+            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         /// <summary>
         /// Checks if a line of text is a comment line.

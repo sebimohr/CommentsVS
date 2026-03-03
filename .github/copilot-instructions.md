@@ -87,3 +87,7 @@ var psi = new ProcessStartInfo(exe, args) {
 ## Code Style
 
 Follow `.editorconfig` rules. Match surrounding code style.
+
+## Profiling Guidelines
+
+- Do not run a profiler unless explicitly requested by the user.
