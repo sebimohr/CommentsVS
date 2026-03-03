@@ -160,15 +160,33 @@ namespace CommentsVS.Adornments
             List<SnapshotSpan> translatedSpans;
             lock (_invalidatedSpans)
             {
-                translatedSpans = [.. _invalidatedSpans.Select(s => s.TranslateTo(snapshot, SpanTrackingMode.EdgeInclusive))];
+                translatedSpans = new List<SnapshotSpan>(_invalidatedSpans.Count);
+                foreach (SnapshotSpan invalidatedSpan in _invalidatedSpans)
+                {
+                    translatedSpans.Add(invalidatedSpan.TranslateTo(snapshot, SpanTrackingMode.EdgeInclusive));
+                }
                 _invalidatedSpans.Clear();
             }
 
             if (translatedSpans.Count == 0)
                 return;
 
-            SnapshotPoint start = translatedSpans.Select(span => span.Start).Min();
-            SnapshotPoint end = translatedSpans.Select(span => span.End).Max();
+            SnapshotPoint start = translatedSpans[0].Start;
+            SnapshotPoint end = translatedSpans[0].End;
+
+            for (var i = 1; i < translatedSpans.Count; i++)
+            {
+                SnapshotSpan currentSpan = translatedSpans[i];
+                if (currentSpan.Start < start)
+                {
+                    start = currentSpan.Start;
+                }
+
+                if (currentSpan.End > end)
+                {
+                    end = currentSpan.End;
+                }
+            }
 
             RaiseTagsChanged(new SnapshotSpan(start, end));
         }
@@ -191,9 +209,15 @@ namespace CommentsVS.Adornments
         {
             SnapshotSpan visibleSpan = view.TextViewLines.FormattedSpan;
 
-            var toRemove = (from kvp in _adornmentCache
-                            where !kvp.Key.TranslateTo(visibleSpan.Snapshot, SpanTrackingMode.EdgeExclusive).IntersectsWith(visibleSpan)
-                            select kvp.Key).ToList();
+            var toRemove = new List<SnapshotSpan>();
+            foreach (KeyValuePair<SnapshotSpan, TAdornment> kvp in _adornmentCache)
+            {
+                SnapshotSpan translatedSpan = kvp.Key.TranslateTo(visibleSpan.Snapshot, SpanTrackingMode.EdgeExclusive);
+                if (!translatedSpan.IntersectsWith(visibleSpan))
+                {
+                    toRemove.Add(kvp.Key);
+                }
+            }
 
             foreach (SnapshotSpan span in toRemove)
                 _adornmentCache.Remove(span);
@@ -205,8 +229,13 @@ namespace CommentsVS.Adornments
                 yield break;
 
             ITextSnapshot requestedSnapshot = spans[0].Snapshot;
-            var translatedSpans = new NormalizedSnapshotSpanCollection(
-                spans.Select(span => span.TranslateTo(snapshot, SpanTrackingMode.EdgeExclusive)));
+            var translatedSpanList = new List<SnapshotSpan>(spans.Count);
+            foreach (SnapshotSpan currentSpan in spans)
+            {
+                translatedSpanList.Add(currentSpan.TranslateTo(snapshot, SpanTrackingMode.EdgeExclusive));
+            }
+
+            var translatedSpans = new NormalizedSnapshotSpanCollection(translatedSpanList);
 
             foreach (TagSpan<IntraTextAdornmentTag> tagSpan in GetAdornmentTagsOnSnapshot(translatedSpans))
             {
@@ -235,9 +264,15 @@ namespace CommentsVS.Adornments
                 }
             }
 
-            foreach (Tuple<SnapshotSpan, PositionAffinity?, TData> spanDataPair in GetAdornmentData(spans).Distinct(new Comparer()))
+            var seenSpans = new HashSet<SnapshotSpan>();
+            foreach (Tuple<SnapshotSpan, PositionAffinity?, TData> spanDataPair in GetAdornmentData(spans))
             {
                 SnapshotSpan snapshotSpan = spanDataPair.Item1;
+                if (!seenSpans.Add(snapshotSpan))
+                {
+                    continue;
+                }
+
                 PositionAffinity? affinity = spanDataPair.Item2;
                 TData adornmentData = spanDataPair.Item3;
 
@@ -306,16 +341,5 @@ namespace CommentsVS.Adornments
             }
         }
 
-        private class Comparer : IEqualityComparer<Tuple<SnapshotSpan, PositionAffinity?, TData>>
-        {
-            public bool Equals(Tuple<SnapshotSpan, PositionAffinity?, TData> x, Tuple<SnapshotSpan, PositionAffinity?, TData> y)
-            {
-                if (x == null && y == null) return true;
-                if (x == null || y == null) return false;
-                return x.Item1.Equals(y.Item1);
-            }
-
-            public int GetHashCode(Tuple<SnapshotSpan, PositionAffinity?, TData> obj) => obj.Item1.GetHashCode();
-        }
     }
 }

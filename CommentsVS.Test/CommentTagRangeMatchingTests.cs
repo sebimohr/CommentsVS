@@ -80,6 +80,30 @@ public sealed class CommentTagRangeMatchingTests
         Assert.AreEqual("NOTE".Length, tagSpans[0].Length);
     }
 
+    [TestMethod]
+    public void RangeMatching_InlineSqlComment_TagOffsetCorrect()
+    {
+        const string text = "SELECT 1; -- TODO: normalize query";
+
+        List<(int Start, int Length)> tagSpans = ExtractTagSpans(text);
+
+        Assert.AreEqual(1, tagSpans.Count);
+        Assert.AreEqual(text.IndexOf("TODO", StringComparison.Ordinal), tagSpans[0].Start);
+        Assert.AreEqual("TODO".Length, tagSpans[0].Length);
+    }
+
+    [TestMethod]
+    public void RangeMatching_InlineHashComment_TagOffsetCorrect()
+    {
+        const string text = "Get-Item . # HACK: temporary";
+
+        List<(int Start, int Length)> tagSpans = ExtractTagSpans(text);
+
+        Assert.AreEqual(1, tagSpans.Count);
+        Assert.AreEqual(text.IndexOf("HACK", StringComparison.Ordinal), tagSpans[0].Start);
+        Assert.AreEqual("HACK".Length, tagSpans[0].Length);
+    }
+
     private static List<(int Start, int Length)> ExtractTagSpans(string text)
     {
         List<(int Start, int Length)> spans = [];
