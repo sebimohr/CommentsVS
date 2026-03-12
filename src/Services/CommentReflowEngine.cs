@@ -292,7 +292,11 @@ namespace CommentsVS.Services
                 }
                 else if (currentLength + 1 + tokenLength <= maxWidth)
                 {
-                    currentLine.Append(' ');
+                    if (!(tokenLength == 1 && char.IsPunctuation(token.Single())))
+                    {
+                        currentLine.Append(' ');
+                    }
+
                     currentLine.Append(token);
                     currentLength += 1 + tokenLength;
                 }
