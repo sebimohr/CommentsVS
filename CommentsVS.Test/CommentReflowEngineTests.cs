@@ -90,6 +90,17 @@ public sealed class CommentReflowEngineTests
         Assert.IsTrue(result.Any(l => l.Contains("ThisIsAVeryLongWordThatExceedsMaxWidth")));
     }
 
+    [TestMethod]
+    public void WrapText_WithXmlTags_NoSpaceBeforePunctuation()
+    {
+        var text = "This is a test with an inline tag <see cref=\"MyClass\"/>.";
+        List<string> result = TestWrapText(text, maxWidth: 30);
+
+        var joined = string.Join(" ", result);
+        // The punctuation should not be separated from the tag
+        Assert.Contains("<see cref=\"MyClass\"/>.", joined, "Punctuation should be right after XML tag");
+    }
+
     #endregion
 
     #region Whitespace Normalization Tests
@@ -386,7 +397,11 @@ public sealed class CommentReflowEngineTests
             }
             else if (currentLength + 1 + tokenLength <= maxWidth)
             {
-                currentLine.Append(' ');
+                if (!(tokenLength == 1 && char.IsPunctuation(token.Single())))
+                {
+                    currentLine.Append(' ');
+                }
+
                 currentLine.Append(token);
                 currentLength += 1 + tokenLength;
             }
